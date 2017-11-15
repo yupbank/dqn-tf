@@ -24,13 +24,31 @@ def _pack_frames_into_state(base, frame):
     old_dimesnion[-1] = old_dimesnion[-1] - 1
     return tf.concat([tf.slice(base, [0, 0, 1], old_dimesnion), frame], axis=-1)
 
-def prepare_imgae(frames):
+def frames_to_state(frames):
     frames_of_gray = tf.map_fn(_resize_into_gray, frames, dtype=tf.float32)
     first_frame = tf.squeeze(tf.slice(frames_of_gray, [0, 0, 0, 0], [1]+frames_of_gray.shape.as_list()[1:]))
     initializer = tf.concat([tf.expand_dims(first_frame, -1) for i in xrange(NUM_OF_FRAME_PER_STATE)], axis=-1)
-    return tf.scan(_pack_frames_into_state, frames_of_gray, initializer=initializer)
+    return tf.foldl(_pack_frames_into_state, frames_of_gray, initializer=initializer)
 
 
 def prepare_action(action_holder, num_of_action=NUM_OF_ACTION):
     return tf.one_hot(action_holder, num_of_action, 1.0, 0.0, name='action_one_hot')
 
+
+def action_score_to_action(action_score, epoch, epsilon_start, epsilon_end, epsilon_end_epoch):
+    action_to_take = tf.argmax(action_score, axis=1)
+    random_action = tf.cast(tf.random_uniform(shape=[None], minval=0.0, maxval=4.0)), tf.int32)
+    epsilon = tf.where(epoch < epsilon_end_epoch, (((epsilon_end - epsilon_start) / epsilon_end_epoch) * epoch + 1), epsilon_end)
+    
+    return tf.where(tf.random_uniform(shape=[None]) > epsilon, random_action, action_to_take)
+
+def q_predicted_reward(action_score):
+    return tf.reduce_max(action_score, axis=1)
+
+def q_future_reward(action_score, action_holder, terminal_holder, discount):
+    action_one_hot = model.prepare_action(action_holder)
+    q_predicted = tf.reduce_sum(action_score * action_one_hot, axis=1)
+    return reward_input + (1.0 - terminal_mask) * discount * q_target
+
+def loss(q_predicted_reward, q_truth_reward):
+    return tf.losses.huber_loss(q_predicted_reward, q_truth_reward)
