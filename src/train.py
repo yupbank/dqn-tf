@@ -92,35 +92,33 @@ def main(_):
 
         frames, append_frame = get_frame_buffer(observe)
         
-        prev_observe_state, next_action = sess.run([input_state, action], {input_images: frames})
+        prev_observe_state, action = sess.run([input_state, action], {input_images: frames})
 
-        
+         
         for episode in xrange(FLAGS.NUM_OF_EPISODE):
+            history = []
             for step in xrange(FLAGS.REPLAY_MEMORY_LENGTH):
                 obs_frame, reward, finished_episode, info = game_env.step(next_action)
-
                 frames = append_frame(obs_frame)
-
                 observe_state, next_action = sess.run([input_state, action], {input_images: frames})
-
-                history.append([observe_state, reward, float(finished_episode), prev_observe_state])
-                
+                history.append([observe_state, reward, action, float(finished_episode), prev_observe_state])
                 prev_observe_state = observe_state
+                action = next_action
             
             for step in xrange(FLAGS.NUM_OF_STEP):
+                states, rewards, actions, terminals, next_states = sample(history, batch_size)
                 if step % FLAGS.TARGET_NETWORK_UPDATE_FREQUENCY == 0:
                     theta_data = sess.run(theta)
-
                 feed_dict = dict(zip(theta, theta_data))
-                feed_dict.update({input_state:state})
+                feed_dict.update({input_state:states})
 
                 q_future_reward_data = sess.run(q_future_reward, feed_dict=feed_dict)
 
                 sess.run(model_update, feed_dict={q_future_reward: q_future_reward_data, 
-                                                  input_state: state, 
-                                                  action_holder: action_holder, 
+                                                  input_state: next_states, 
+                                                  action_holder: actions,
                                                   reward_input: reward, 
-                                                  terminal_mask: terminal})
+                                                  terminal_holder: terminal})
 
 if __name__ == "__main__":
     tf.app.run()
