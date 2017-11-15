@@ -2,7 +2,22 @@ import model
 import gym
 import tensorflow as tf
 
-def train():
+
+
+
+tf.app.flags.DEFINE_string('checkpoint_dir', '/tmp/inception_train',
+                                   """Directory where to read training checkpoints.""")
+tf.app.flags.DEFINE_string('output_dir', '/tmp/inception_output',
+                                   """Directory where to export inference model.""")
+tf.app.flags.DEFINE_integer('NUM_OF_EPISODE', 1,
+                                    """How many episode to run.""")
+tf.app.flags.DEFINE_integer('NUM_OF_STEP', 100,
+                                    """How many step to train in one episode.""")
+FLAGS = tf.app.flags.FLAGS
+
+DISCOUNT = 0.5
+
+def main(_):
     input_images = tf.placeholder(tf.float32, shape=[None, 210, 160, 3])
     action_holder = tf.placeholder(tf.int32, shape=[None])
     reward_input = tf.placeholder(tf.int32, shape=[None])
@@ -34,8 +49,8 @@ def train():
         observe = game_env.reset()
         sess.run(tf.global_variables_initializer())
 
-        for episode in xrange(NUM_OF_EPISODE):
-            for step in xrange(NUM_OF_STEP):
+        for episode in xrange(FLAGS.NUM_OF_EPISODE):
+            for step in xrange(FLAGS.NUM_OF_STEP):
                 if step % t == 0:
                     theta_data = sess.run(theta)
 
@@ -73,7 +88,4 @@ def train():
                                               terminal_mask: terminal})
 
 if __name__ == "__main__":
-    game_env = gym.make('BreakoutNoFrameskip-v4')
-    observe = game_env.reset()
-    print observe
-    main()
+    tf.app.run()
