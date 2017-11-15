@@ -15,20 +15,20 @@ def q_function(state, num_of_action=NUM_OF_ACTION, scope=''):
         return score
 
 
-def _gray_imgae(frame):
+def _resize_into_gray(frame):
     gray_image = tf.image.rgb_to_grayscale(frame)
     return tf.image.resize_images(gray_image, FRAME_SIZE)
 
-def _pack(base, frame):
+def _pack_frames_into_state(base, frame):
     old_dimesnion = base.shape.as_list()
     old_dimesnion[-1] = old_dimesnion[-1] - 1
     return tf.concat([tf.slice(base, [0, 0, 1], old_dimesnion), frame], axis=-1)
 
 def prepare_imgae(frames):
-    frames_of_gray = tf.map_fn(_gray_imgae, frames, dtype=tf.float32)
+    frames_of_gray = tf.map_fn(_resize_into_gray, frames, dtype=tf.float32)
     first_frame = tf.squeeze(tf.slice(frames_of_gray, [0, 0, 0, 0], [1]+frames_of_gray.shape.as_list()[1:]))
     initializer = tf.concat([tf.expand_dims(first_frame, -1) for i in xrange(NUM_OF_FRAME_PER_STATE)], axis=-1)
-    return tf.scan(_pack, frames_of_gray, initializer=initializer)
+    return tf.scan(_pack_frames_into_state, frames_of_gray, initializer=initializer)
 
 
 def prepare_action(action_holder, num_of_action=NUM_OF_ACTION):
