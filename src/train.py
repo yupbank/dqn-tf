@@ -18,10 +18,10 @@ tf.app.flags.DEFINE_float("EPSILON_END", 0.1, "Ending value for probability of g
 tf.app.flags.DEFINE_float("EPSILON_END_EPOCH", 100, "Ending epoch to anneal epsilon.")
 
 tf.app.flags.DEFINE_float("DISCOUNT", 0.99, "Amount to discount future rewards.")
-tf.app.flags.DEFINE_integer("BURANOUT", 4, "Number of frames to play before training a batch.")
-tf.app.flags.DEFINE_integer("FRAME_PER_STATE", 4, "Number of frames of past history to model game state.")
+tf.app.flags.DEFINE_integer("BURANOUT", 4, "Maximum Number of actions to play before every episode.")
+tf.app.flags.DEFINE_integer("FRAME_PER_STATE", 4, "`agent history length` Number of frames of past history to model game state.")
 tf.app.flags.DEFINE_integer("ACTION_SPACE", 4, "Number of possible output actions.")
-tf.app.flags.DEFINE_integer("REPLAY_MEMORY_LENGTH", 50, "Number of historical experiences to store.")
+tf.app.flags.DEFINE_integer("REPLAY_MEMORY_LENGTH", 1000000, "Number of historical experiences to store.")
 tf.app.flags.DEFINE_integer("MIN_REPLAY_MEMORY_LENGTH", 50000, "Minimum number of experiences to start training.")
 tf.app.flags.DEFINE_integer("BATCH_SIZE", 32, "Size of mini-batch.")
 tf.app.flags.DEFINE_integer("TARGET_NETWORK_UPDATE_FREQUENCY", 10000, "Rate at which to update the target network.")
@@ -98,48 +98,61 @@ def main(_):
     with tf.Session(graph=graph) as sess:
         game_env = gym.make('BreakoutNoFrameskip-v4')
 
-        observe = game_env.reset()
 
         sess.run(tf.global_variables_initializer())
 
         append_frame = get_frame_buffer()
 
-        for i in xrange(FLAGS.FRAME_PER_STATE):
-            frames = append_frame(observe)
-
-        prev_observe_state, action = sess.run([input_state, action_to_take], {input_images: frames})
+        memory_buffer = get_frame_buffer(maxlen=FLAGS.REPLAY_MEMORY_LENGTH)
 
          
         for episode in xrange(FLAGS.NUM_OF_EPISODE):
-            history = []
-            for step in xrange(FLAGS.REPLAY_MEMORY_LENGTH):
-                obs_frame, reward, finished_episode, info = game_env.step(action)
+            observe = game_env.reset()
+            for i in xrange(FLAGS.FRAME_PER_STATE):
+                frames = append_frame(observe)
+
+            for _ in xrange(FLAGS.BURANOUT):
+                observe, reward, finished, _ = game_env.step(game_env.action_space.sample())
+                frames.append(observe)
+                if finished:
+                    break
+
+            prev_observe_state, action = sess.run([input_state, action_to_take], {input_images: frames})
+
+            action = action[0]
+
+            for t in xrange(FLAGS.NUM_OF_STEP):
+                obs_frame, reward, finished, info = game_env.step(action)
                 frames = append_frame(obs_frame)
                 observe_state, next_action = sess.run([input_state, action_to_take], {input_images: frames, epoch: [episode]})
-                history.append([observe_state, reward, action[0], float(finished_episode), prev_observe_state])
+                next_action = next_action[0]
+                history = memory_buffer([observe_state, reward, action, float(finished), prev_observe_state])
                 prev_observe_state = observe_state
                 action = next_action
-            for step in xrange(FLAGS.NUM_OF_STEP):
-                states, rewards, actions, terminals, next_states = sample(history, FLAGS.BATCH_SIZE)
-                if step % FLAGS.TARGET_NETWORK_UPDATE_FREQUENCY == 0:
+                if finished:
+                    game_env.reset()
+
+                if t % FLAGS.TARGET_NETWORK_UPDATE_FREQUENCY == 0:
                     theta_data = sess.run(theta)
-                feed_dict = dict(zip(theta, theta_data))
-                feed_dict.update({
-                                 input_states:states,
-                                 terminal_holder: terminals,
-                                 action_holder: actions,
-                                 reward_holder: rewards, 
-                                 })
 
-                q_future_reward_data = sess.run(q_future_reward, feed_dict=feed_dict)
+                if len(history) > FLAGS.MIN_REPLAY_MEMORY_LENGTH:
+                    states, rewards, actions, terminals, next_states = sample(history, FLAGS.BATCH_SIZE)
 
-                sess.run(model_update, feed_dict={
-                                                 q_future_reward: q_future_reward_data, 
-                                                 input_states:states,
-                                                 terminal_holder: terminals,
-                                                 action_holder: actions,
-                                                 reward_holder: rewards, 
-                                                  })
+                    feed_dict = dict(zip(theta, theta_data))
+                    feed_dict.update({
+                                     input_states:next_states,
+                                     terminal_holder: terminals,
+                                     })
+
+                    q_future_reward_data = sess.run(q_future_reward, feed_dict=feed_dict)
+
+                    sess.run(model_update, feed_dict={
+                                                     q_future_reward: q_future_reward_data, 
+                                                     input_states:states,
+                                                     terminal_holder: terminals,
+                                                     action_holder: actions,
+                                                     reward_holder: rewards, 
+                                                      })
             saver.save(sess, FLAGS.checkpoint_dir, global_step=episode)
 
 if __name__ == "__main__":
