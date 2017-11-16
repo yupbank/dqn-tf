@@ -5,10 +5,8 @@ import numpy as np
 from collections import  deque
 from operator import itemgetter
 
-tf.app.flags.DEFINE_string('checkpoint_dir', '/tmp/inception_train',
+tf.app.flags.DEFINE_string('checkpoint_dir', '/tmp/deep-q-network',
                                    """Directory where to read training checkpoints.""")
-tf.app.flags.DEFINE_string('output_dir', '/tmp/inception_output',
-                                   """Directory where to export inference model.""")
 tf.app.flags.DEFINE_integer('NUM_OF_EPISODE', 1,
                                     """How many episode to run.""")
 tf.app.flags.DEFINE_integer('NUM_OF_STEP', 100,
@@ -29,10 +27,6 @@ tf.app.flags.DEFINE_integer("BATCH_SIZE", 32, "Size of mini-batch.")
 tf.app.flags.DEFINE_integer("TARGET_NETWORK_UPDATE_FREQUENCY", 10000, "Rate at which to update the target network.")
 
 FLAGS = tf.app.flags.FLAGS
-
-
-def epsilon(epoch):
-        return (((FLAGS.EPSILON_END - FLAGS.EPSILON_START) / FLAGS.EPSILON_END_EPOCH) * epoch + 1) if epoch < FLAGS.EPSILON_END_EPOCH else FLAGS.EPSILON_END
 
 
 def get_frame_buffer(maxlen=4):
@@ -60,25 +54,27 @@ def sample(history, batch_size):
 
 def main(_):
     graph = tf.Graph()
+
     with graph.as_default():
         input_images = tf.placeholder_with_default(tf.zeros([1, 210, 160, 3], tf.float32), shape=[None, 210, 160, 3], name='input_images')
         action_holder = tf.placeholder(tf.int32, shape=[None], name='action_holder')
         reward_holder = tf.placeholder(tf.float32, shape=[None], name='reward_holder')
         terminal_holder = tf.placeholder(tf.float32, shape=[None], name='terminal_holder')
-        epoch = tf.placeholder(tf.float32, shape=[1], name='epoch')
-        # util for play
+        epoch = tf.placeholder_with_default(tf.zeros([1], tf.float32), shape=[1], name='epoch')
         input_state = model.frames_to_state(input_images)
-
         _input_states = tf.expand_dims(input_state, 0)
-
         input_states = (
                             _input_states +
                             tf.placeholder_with_default(tf.zeros_like(_input_states), shape=[None, 80, 80, 4], name='batch_states')
                         )
-         
+
+        # util for play
         action_score = model.q_function(input_states)
-        epsilon_end = tf.constant([FLAGS.EPSILON_END])
-        action_to_take = model.action_score_to_action(action_score, epoch, epsilon_start=FLAGS.EPSILON_START, epsilon_end=epsilon_end, epsilon_end_epoch=FLAGS.EPSILON_END_EPOCH)
+        action_to_take = model.action_score_to_action(action_score, 
+                                                      epoch, 
+                                                      epsilon_start=FLAGS.EPSILON_START, 
+                                                      epsilon_end=FLAGS.EPSILON_END, 
+                                                      epsilon_end_epoch=FLAGS.EPSILON_END_EPOCH)
 
         # util for train 
         # the reason we expose future_reward is that we are using an old theta to calculate them
@@ -88,17 +84,16 @@ def main(_):
                                                 terminal_holder, 
                                                 discount=FLAGS.DISCOUNT)
         q_predicted_reward = model.q_predicted_reward(action_score)
-
         loss = model.loss(q_predicted_reward, q_future_reward)
-
         trainer = tf.train.RMSPropOptimizer(
                 learning_rate=0.00025,
                 momentum=0.95
                 )
-
         model_update = trainer.minimize(loss)
 
         theta = tf.trainable_variables()
+        
+        saver = tf.train.Saver(theta, max_to_keep=4)
     
     with tf.Session(graph=graph) as sess:
         game_env = gym.make('BreakoutNoFrameskip-v4')
@@ -108,9 +103,11 @@ def main(_):
         sess.run(tf.global_variables_initializer())
 
         append_frame = get_frame_buffer()
+
         for i in xrange(FLAGS.FRAME_PER_STATE):
             frames = append_frame(observe)
-        prev_observe_state, action = sess.run([input_state, action_to_take], {input_images: frames, epoch: [0]})
+
+        prev_observe_state, action = sess.run([input_state, action_to_take], {input_images: frames})
 
          
         for episode in xrange(FLAGS.NUM_OF_EPISODE):
@@ -143,6 +140,7 @@ def main(_):
                                                  action_holder: actions,
                                                  reward_holder: rewards, 
                                                   })
+            saver.save(sess, FLAGS.checkpoint_dir, global_step=episode)
 
 if __name__ == "__main__":
     tf.app.run()

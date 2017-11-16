@@ -39,7 +39,7 @@ def action_score_to_action(action_score, epoch, epsilon_start, epsilon_end, epsi
     action_to_take = tf.argmax(action_score, axis=1)
     random_action = tf.cast(tf.random_uniform(shape=[1], minval=0.0, maxval=4.0), tf.int64)
     epsilon_start_with = (((epsilon_end - epsilon_start) / epsilon_end_epoch) * epoch + 1)
-    epsilon = tf.where(epoch < epsilon_end_epoch, epsilon_start_with, epsilon_end)
+    epsilon = tf.where(epoch < epsilon_end_epoch, epsilon_start_with, [epsilon_end])
     
     return tf.where(tf.random_uniform(shape=[1]) > epsilon, random_action, action_to_take)
 
