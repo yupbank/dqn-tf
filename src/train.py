@@ -3,7 +3,7 @@ import gym
 import tensorflow as tf
 import numpy as np
 from collections import  deque
-
+from operator import itemgetter
 
 tf.app.flags.DEFINE_string('checkpoint_dir', '/tmp/inception_train',
                                    """Directory where to read training checkpoints.""")
@@ -17,13 +17,13 @@ tf.app.flags.DEFINE_integer('NUM_OF_STEP', 100,
 
 tf.app.flags.DEFINE_float("EPSILON_START", 1, "Starting value for probability of greediness.")
 tf.app.flags.DEFINE_float("EPSILON_END", 0.1, "Ending value for probability of greediness.")
-tf.app.flags.DEFINE_float("EPSILON_END_EPOCH", 1000000, "Ending epoch to anneal epsilon.")
+tf.app.flags.DEFINE_float("EPSILON_END_EPOCH", 100, "Ending epoch to anneal epsilon.")
 
 tf.app.flags.DEFINE_float("DISCOUNT", 0.99, "Amount to discount future rewards.")
 tf.app.flags.DEFINE_integer("BURANOUT", 4, "Number of frames to play before training a batch.")
 tf.app.flags.DEFINE_integer("FRAME_PER_STATE", 4, "Number of frames of past history to model game state.")
 tf.app.flags.DEFINE_integer("ACTION_SPACE", 4, "Number of possible output actions.")
-tf.app.flags.DEFINE_integer("REPLAY_MEMORY_LENGTH", 500000, "Number of historical experiences to store.")
+tf.app.flags.DEFINE_integer("REPLAY_MEMORY_LENGTH", 50, "Number of historical experiences to store.")
 tf.app.flags.DEFINE_integer("MIN_REPLAY_MEMORY_LENGTH", 50000, "Minimum number of experiences to start training.")
 tf.app.flags.DEFINE_integer("BATCH_SIZE", 32, "Size of mini-batch.")
 tf.app.flags.DEFINE_integer("TARGET_NETWORK_UPDATE_FREQUENCY", 10000, "Rate at which to update the target network.")
@@ -35,44 +35,61 @@ def epsilon(epoch):
         return (((FLAGS.EPSILON_END - FLAGS.EPSILON_START) / FLAGS.EPSILON_END_EPOCH) * epoch + 1) if epoch < FLAGS.EPSILON_END_EPOCH else FLAGS.EPSILON_END
 
 
-def get_frame_buffer(frame, max_len=4, fill=True):
-    frame_buffer = deque(max_len=max_len)
+def get_frame_buffer(maxlen=4):
+    frame_buffer = deque(maxlen=maxlen)
 
     def append(frame):
-        return frame_buffer.append(frame)
+        frame_buffer.append(frame)
+        return frame_buffer
 
-    if fill:
-        for i in xrange(max_len):
-            append(frame)
+    return append
 
-    return frame_buffer, append
 
+def sample(history, batch_size):
+    history_size = len(history)
+    index = np.random.randint(0, history_size, batch_size)
+    sampled_memory = [history[i] for i in index]
+    return (
+            map(itemgetter(0), sampled_memory), 
+            map(itemgetter(1), sampled_memory), 
+            map(itemgetter(2), sampled_memory), 
+            map(itemgetter(3), sampled_memory), 
+            map(itemgetter(4), sampled_memory)
+            )
 
 
 def main(_):
-    input_images = tf.placeholder(tf.float32, shape=[None, 210, 160, 3])
-    action_holder = tf.placeholder(tf.int32, shape=[None])
-    reward_input = tf.placeholder(tf.int32, shape=[None])
-    terminal_holder = tf.placeholder(tf.float32, shape=[None])
-    epoch = tf.placeholde(tf.float32, shape=[1])
-    
-    with tf.Graph().as_default() as g:
+    graph = tf.Graph()
+    with graph.as_default():
+        input_images = tf.placeholder_with_default(tf.zeros([1, 210, 160, 3], tf.float32), shape=[None, 210, 160, 3], name='input_images')
+        action_holder = tf.placeholder(tf.int32, shape=[None], name='action_holder')
+        reward_holder = tf.placeholder(tf.float32, shape=[None], name='reward_holder')
+        terminal_holder = tf.placeholder(tf.float32, shape=[None], name='terminal_holder')
+        epoch = tf.placeholder(tf.float32, shape=[1], name='epoch')
         # util for play
         input_state = model.frames_to_state(input_images)
-        input_states = tf.expand_dims(input_states, 0)
 
+        _input_states = tf.expand_dims(input_state, 0)
+
+        input_states = (
+                            _input_states +
+                            tf.placeholder_with_default(tf.zeros_like(_input_states), shape=[None, 80, 80, 4], name='batch_states')
+                        )
+         
         action_score = model.q_function(input_states)
-        action_to_take = model.action_score_to_action(action_score)
+        epsilon_end = tf.constant([FLAGS.EPSILON_END])
+        action_to_take = model.action_score_to_action(action_score, epoch, epsilon_start=FLAGS.EPSILON_START, epsilon_end=epsilon_end, epsilon_end_epoch=FLAGS.EPSILON_END_EPOCH)
 
         # util for train 
         # the reason we expose future_reward is that we are using an old theta to calculate them
         q_future_reward = model.q_future_reward(action_score, 
                                                 action_holder, 
+                                                reward_holder,
                                                 terminal_holder, 
                                                 discount=FLAGS.DISCOUNT)
         q_predicted_reward = model.q_predicted_reward(action_score)
 
-        loss = model.loss(q_predicted_reward, q_truth_reward)
+        loss = model.loss(q_predicted_reward, q_future_reward)
 
         trainer = tf.train.RMSPropOptimizer(
                 learning_rate=0.00025,
@@ -83,42 +100,49 @@ def main(_):
 
         theta = tf.trainable_variables()
     
-    with tf.Session() as sess, g.as_default():
+    with tf.Session(graph=graph) as sess:
         game_env = gym.make('BreakoutNoFrameskip-v4')
 
         observe = game_env.reset()
 
         sess.run(tf.global_variables_initializer())
 
-        frames, append_frame = get_frame_buffer(observe)
-        
-        prev_observe_state, action = sess.run([input_state, action], {input_images: frames})
+        append_frame = get_frame_buffer()
+        for i in xrange(FLAGS.FRAME_PER_STATE):
+            frames = append_frame(observe)
+        prev_observe_state, action = sess.run([input_state, action_to_take], {input_images: frames, epoch: [0]})
 
          
         for episode in xrange(FLAGS.NUM_OF_EPISODE):
             history = []
             for step in xrange(FLAGS.REPLAY_MEMORY_LENGTH):
-                obs_frame, reward, finished_episode, info = game_env.step(next_action)
+                obs_frame, reward, finished_episode, info = game_env.step(action)
                 frames = append_frame(obs_frame)
-                observe_state, next_action = sess.run([input_state, action], {input_images: frames})
-                history.append([observe_state, reward, action, float(finished_episode), prev_observe_state])
+                observe_state, next_action = sess.run([input_state, action_to_take], {input_images: frames, epoch: [episode]})
+                history.append([observe_state, reward, action[0], float(finished_episode), prev_observe_state])
                 prev_observe_state = observe_state
                 action = next_action
-            
             for step in xrange(FLAGS.NUM_OF_STEP):
-                states, rewards, actions, terminals, next_states = sample(history, batch_size)
+                states, rewards, actions, terminals, next_states = sample(history, FLAGS.BATCH_SIZE)
                 if step % FLAGS.TARGET_NETWORK_UPDATE_FREQUENCY == 0:
                     theta_data = sess.run(theta)
                 feed_dict = dict(zip(theta, theta_data))
-                feed_dict.update({input_state:states})
+                feed_dict.update({
+                                 input_states:states,
+                                 terminal_holder: terminals,
+                                 action_holder: actions,
+                                 reward_holder: rewards, 
+                                 })
 
                 q_future_reward_data = sess.run(q_future_reward, feed_dict=feed_dict)
 
-                sess.run(model_update, feed_dict={q_future_reward: q_future_reward_data, 
-                                                  input_state: next_states, 
-                                                  action_holder: actions,
-                                                  reward_input: reward, 
-                                                  terminal_holder: terminal})
+                sess.run(model_update, feed_dict={
+                                                 q_future_reward: q_future_reward_data, 
+                                                 input_states:states,
+                                                 terminal_holder: terminals,
+                                                 action_holder: actions,
+                                                 reward_holder: rewards, 
+                                                  })
 
 if __name__ == "__main__":
     tf.app.run()

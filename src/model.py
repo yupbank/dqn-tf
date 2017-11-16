@@ -37,18 +37,19 @@ def prepare_action(action_holder, num_of_action=NUM_OF_ACTION):
 
 def action_score_to_action(action_score, epoch, epsilon_start, epsilon_end, epsilon_end_epoch):
     action_to_take = tf.argmax(action_score, axis=1)
-    random_action = tf.cast(tf.random_uniform(shape=[None], minval=0.0, maxval=4.0)), tf.int32)
-    epsilon = tf.where(epoch < epsilon_end_epoch, (((epsilon_end - epsilon_start) / epsilon_end_epoch) * epoch + 1), epsilon_end)
+    random_action = tf.cast(tf.random_uniform(shape=[1], minval=0.0, maxval=4.0), tf.int64)
+    epsilon_start_with = (((epsilon_end - epsilon_start) / epsilon_end_epoch) * epoch + 1)
+    epsilon = tf.where(epoch < epsilon_end_epoch, epsilon_start_with, epsilon_end)
     
-    return tf.where(tf.random_uniform(shape=[None]) > epsilon, random_action, action_to_take)
+    return tf.where(tf.random_uniform(shape=[1]) > epsilon, random_action, action_to_take)
 
 def q_predicted_reward(action_score):
     return tf.reduce_max(action_score, axis=1)
 
-def q_future_reward(action_score, action_holder, terminal_holder, discount):
-    action_one_hot = model.prepare_action(action_holder)
+def q_future_reward(action_score, action_holder, reward_holder, terminal_holder, discount):
+    action_one_hot = prepare_action(action_holder)
     q_predicted = tf.reduce_sum(action_score * action_one_hot, axis=1)
-    return reward_input + (1.0 - terminal_mask) * discount * q_target
+    return reward_holder + (1.0 - terminal_holder) * discount * q_predicted
 
 def loss(q_predicted_reward, q_truth_reward):
     return tf.losses.huber_loss(q_predicted_reward, q_truth_reward)
