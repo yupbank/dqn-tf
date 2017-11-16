@@ -49,7 +49,7 @@ def q_predicted_reward(action_score):
 def q_future_reward(action_score, action_holder, reward_holder, terminal_holder, discount):
     action_one_hot = prepare_action(action_holder)
     q_predicted = tf.reduce_sum(action_score * action_one_hot, axis=1)
-    return reward_holder + (1.0 - terminal_holder) * discount * q_predicted
+    return tf.stop_gradient(reward_holder + (1.0 - terminal_holder) * discount * q_predicted)
 
 def loss(q_predicted_reward, q_truth_reward):
     return tf.losses.huber_loss(q_predicted_reward, q_truth_reward)

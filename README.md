@@ -2,4 +2,6 @@
 
 -----
 
-the target is to make it trainable in google ml engine
+The objective is to make it trainable in google ml engine.
+
+And use tensorflow as much as possible.
